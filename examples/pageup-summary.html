@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Pageup turns local HTML into authenticated, unlisted, shareable pages for project summaries, progress reports, demos, and visual handoffs.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='11' fill='%23171816'/%3E%3Cpath d='M16 47V17h14c9 0 14 4.6 14 12s-5 12-14 12h-6v6h-8Zm8-14h6c4 0 6-1.3 6-4s-2-4-6-4h-6v8Z' fill='%23eee9dc'/%3E%3Cpath d='m42 43 6-6 6 6m-6-6v13' fill='none' stroke='%23c9ff3d' stroke-width='4' stroke-linecap='square' stroke-linejoin='miter'/%3E%3Ccircle cx='14' cy='51' r='4' fill='%23ff5538'/%3E%3C/svg%3E">
+  <title>Pageup — Make the work visible</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #eee9dc;
+      --paper-bright: #f8f4e8;
+      --ink: #171816;
+      --muted: #6c6a62;
+      --line: #262722;
+      --signal: #ff5538;
+      --acid: #c9ff3d;
+      --blue: #295cff;
+      --display: "Iowan Old Style", "Palatino Linotype", Baskerville, Georgia, serif;
+      --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        linear-gradient(90deg, rgba(23, 24, 22, .035) 1px, transparent 1px) 0 0 / 32px 32px,
+        linear-gradient(rgba(23, 24, 22, .035) 1px, transparent 1px) 0 0 / 32px 32px,
+        var(--paper);
+      color: var(--ink);
+      font-family: var(--mono);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      pointer-events: none;
+      content: "";
+      opacity: .16;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.78' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    .skip-link {
+      position: fixed;
+      z-index: 100;
+      top: 1rem;
+      left: 1rem;
+      padding: .75rem 1rem;
+      background: var(--acid);
+      color: var(--ink);
+      font-weight: 800;
+      transform: translateY(-200%);
+    }
+
+    .skip-link:focus {
+      transform: translateY(0);
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .masthead {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      min-height: 88px;
+      border-bottom: 2px solid var(--line);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    .masthead__mark {
+      justify-self: center;
+      font-family: var(--display);
+      font-size: 1.55rem;
+      font-style: italic;
+      letter-spacing: -.04em;
+      text-transform: none;
+    }
+
+    .masthead__state {
+      justify-self: end;
+      display: inline-flex;
+      gap: .55rem;
+      align-items: center;
+    }
+
+    .pulse {
+      width: .62rem;
+      height: .62rem;
+      border: 1px solid var(--ink);
+      border-radius: 50%;
+      background: var(--acid);
+      box-shadow: 0 0 0 5px rgba(201, 255, 61, .35);
+      animation: breathe 1.8s ease-in-out infinite;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(300px, .75fr);
+      gap: clamp(2.5rem, 8vw, 8rem);
+      padding: clamp(4.5rem, 10vw, 9rem) 0 5rem;
+      align-items: end;
+    }
+
+    .kicker,
+    .section-label {
+      display: flex;
+      gap: .8rem;
+      align-items: center;
+      margin: 0 0 1.4rem;
+      color: var(--muted);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .kicker::before,
+    .section-label::before {
+      width: 2.5rem;
+      height: 3px;
+      background: var(--signal);
+      content: "";
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 870px;
+      margin-bottom: 2rem;
+      font-family: var(--display);
+      font-size: clamp(4.1rem, 10.5vw, 9.5rem);
+      font-weight: 500;
+      letter-spacing: -.075em;
+      line-height: .78;
+    }
+
+    h1 em {
+      color: var(--signal);
+      font-weight: 500;
+    }
+
+    .lede {
+      max-width: 650px;
+      margin-bottom: 0;
+      font-family: var(--display);
+      font-size: clamp(1.25rem, 2vw, 1.7rem);
+      line-height: 1.35;
+    }
+
+    .dispatch {
+      position: relative;
+      padding: 1.35rem;
+      border: 2px solid var(--line);
+      background: var(--acid);
+      box-shadow: 12px 12px 0 var(--ink);
+      transform: rotate(1.5deg);
+    }
+
+    .dispatch::before {
+      position: absolute;
+      top: -13px;
+      left: 24px;
+      width: 72px;
+      height: 22px;
+      background: rgba(255, 255, 255, .58);
+      content: "";
+      transform: rotate(-4deg);
+    }
+
+    .dispatch__label {
+      margin-bottom: 1rem;
+      font-size: .68rem;
+      font-weight: 900;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    .dispatch__title {
+      margin-bottom: .8rem;
+      font-family: var(--display);
+      font-size: 2rem;
+      line-height: 1;
+    }
+
+    .dispatch p:last-child {
+      margin-bottom: 0;
+      font-size: .82rem;
+      line-height: 1.55;
+    }
+
+    .command-deck {
+      overflow: hidden;
+      border: 2px solid var(--line);
+      background: var(--ink);
+      color: #f8f5eb;
+      box-shadow: 0 16px 0 rgba(23, 24, 22, .12);
+    }
+
+    .command-deck__bar {
+      display: flex;
+      justify-content: space-between;
+      padding: .8rem 1rem;
+      border-bottom: 1px solid #4c4d47;
+      color: #aaa99f;
+      font-size: .68rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .command-deck__body {
+      padding: clamp(1.4rem, 4vw, 2.4rem);
+      font-size: clamp(.82rem, 2vw, 1rem);
+      line-height: 1.9;
+    }
+
+    .prompt {
+      color: var(--acid);
+    }
+
+    .output {
+      color: #9da9ff;
+      overflow-wrap: anywhere;
+    }
+
+    .flow {
+      margin: 5rem 0 8rem;
+      border-top: 2px solid var(--line);
+      border-bottom: 2px solid var(--line);
+    }
+
+    .flow__grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+    }
+
+    .flow__item {
+      position: relative;
+      min-height: 220px;
+      padding: 1.5rem;
+      border-right: 1px solid var(--line);
+    }
+
+    .flow__item:last-child {
+      border-right: 0;
+    }
+
+    .flow__number {
+      display: block;
+      margin-bottom: 3.2rem;
+      color: var(--signal);
+      font-family: var(--display);
+      font-size: 2.8rem;
+      font-style: italic;
+    }
+
+    .flow h3 {
+      margin-bottom: .55rem;
+      font-family: var(--display);
+      font-size: 1.55rem;
+    }
+
+    .flow p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: .76rem;
+      line-height: 1.55;
+    }
+
+    .flow__item:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -14px;
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: var(--paper);
+      content: "→";
+      font-size: .85rem;
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      align-items: end;
+      margin-bottom: 3rem;
+    }
+
+    .section-head h2 {
+      max-width: 720px;
+      margin-bottom: 0;
+      font-family: var(--display);
+      font-size: clamp(3rem, 6vw, 5.7rem);
+      font-weight: 500;
+      letter-spacing: -.055em;
+      line-height: .94;
+    }
+
+    .section-head__note {
+      max-width: 460px;
+      justify-self: end;
+      margin-bottom: .4rem;
+      color: var(--muted);
+      font-size: .82rem;
+      line-height: 1.65;
+    }
+
+    .use-grid {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr 1fr;
+      gap: 1.2rem;
+      margin-bottom: 8rem;
+    }
+
+    .use-card {
+      min-height: 320px;
+      padding: 1.5rem;
+      border: 2px solid var(--line);
+      background: var(--paper-bright);
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+
+    .use-card:nth-child(2) {
+      background: var(--blue);
+      color: white;
+      transform: translateY(2.2rem);
+    }
+
+    .use-card:nth-child(3) {
+      background: var(--signal);
+    }
+
+    .use-card:hover {
+      box-shadow: 8px 8px 0 var(--ink);
+      transform: translate(-4px, -4px);
+    }
+
+    .use-card:nth-child(2):hover {
+      transform: translate(-4px, calc(2.2rem - 4px));
+    }
+
+    .use-card__index {
+      display: block;
+      margin-bottom: 7rem;
+      font-size: .7rem;
+      font-weight: 900;
+      letter-spacing: .12em;
+    }
+
+    .use-card h3 {
+      margin-bottom: .7rem;
+      font-family: var(--display);
+      font-size: 2rem;
+      line-height: 1;
+    }
+
+    .use-card p {
+      margin-bottom: 0;
+      font-size: .78rem;
+      line-height: 1.6;
+    }
+
+    .truths {
+      display: grid;
+      grid-template-columns: minmax(260px, .75fr) 1.5fr;
+      gap: clamp(2rem, 7vw, 7rem);
+      padding: 6rem 0;
+      border-top: 2px solid var(--line);
+    }
+
+    .truths__intro h2 {
+      margin-bottom: 1rem;
+      font-family: var(--display);
+      font-size: clamp(2.8rem, 5vw, 4.7rem);
+      font-weight: 500;
+      letter-spacing: -.05em;
+      line-height: .95;
+    }
+
+    .truths__intro p {
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.6;
+    }
+
+    .truth-list {
+      margin: 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .truth-row {
+      display: grid;
+      grid-template-columns: 1fr 1.4fr;
+      gap: 2rem;
+      padding: 1.45rem 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .truth-row dt {
+      font-family: var(--display);
+      font-size: 1.35rem;
+      font-weight: 700;
+    }
+
+    .truth-row dd {
+      margin: 0;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.55;
+    }
+
+    .status-band {
+      margin: 3rem 0 8rem;
+      padding: clamp(2rem, 5vw, 4rem);
+      background: var(--ink);
+      color: var(--paper-bright);
+    }
+
+    .status-band__top {
+      display: flex;
+      justify-content: space-between;
+      gap: 2rem;
+      align-items: baseline;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid #56574f;
+    }
+
+    .status-band h2 {
+      margin-bottom: 0;
+      font-family: var(--display);
+      font-size: clamp(3rem, 7vw, 6.5rem);
+      font-weight: 500;
+      letter-spacing: -.06em;
+    }
+
+    .stamp {
+      padding: .55rem .75rem;
+      border: 1px solid var(--acid);
+      color: var(--acid);
+      font-size: .68rem;
+      font-weight: 900;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      transform: rotate(-2deg);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+    }
+
+    .metric {
+      padding: 2rem 1rem 0 0;
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: .35rem;
+      color: var(--acid);
+      font-family: var(--display);
+      font-size: clamp(2rem, 4vw, 3.8rem);
+      font-weight: 500;
+    }
+
+    .metric span {
+      color: #aaa99f;
+      font-size: .68rem;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .closing {
+      display: grid;
+      grid-template-columns: 1.4fr .6fr;
+      gap: 3rem;
+      padding: 1rem 0 8rem;
+      align-items: end;
+    }
+
+    .closing h2 {
+      margin-bottom: 0;
+      font-family: var(--display);
+      font-size: clamp(3.7rem, 9vw, 8rem);
+      font-weight: 500;
+      letter-spacing: -.07em;
+      line-height: .82;
+    }
+
+    .closing h2 span {
+      color: var(--blue);
+      font-style: italic;
+    }
+
+    .closing__note {
+      padding-left: 1.2rem;
+      border-left: 4px solid var(--signal);
+      color: var(--muted);
+      font-size: .8rem;
+      line-height: 1.6;
+    }
+
+    footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 2rem;
+      padding: 1.4rem 0 2rem;
+      border-top: 2px solid var(--line);
+      font-size: .67rem;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .reveal {
+      animation: arrive .7s cubic-bezier(.22, 1, .36, 1) both;
+    }
+
+    .delay-1 { animation-delay: .08s; }
+    .delay-2 { animation-delay: .16s; }
+    .delay-3 { animation-delay: .24s; }
+
+    @keyframes arrive {
+      from { opacity: 0; transform: translateY(22px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes breathe {
+      50% { box-shadow: 0 0 0 8px rgba(201, 255, 61, .14); }
+    }
+
+    @media (max-width: 820px) {
+      .shell {
+        width: min(100% - 28px, 680px);
+      }
+
+      .masthead {
+        grid-template-columns: 1fr auto;
+      }
+
+      .masthead__mark {
+        display: none;
+      }
+
+      .hero,
+      .section-head,
+      .truths,
+      .closing {
+        grid-template-columns: 1fr;
+      }
+
+      .hero {
+        gap: 3rem;
+        padding-top: 5rem;
+      }
+
+      .dispatch {
+        width: min(90%, 430px);
+      }
+
+      .flow__grid,
+      .metrics {
+        grid-template-columns: repeat(2, 1fr);
+      }
+
+      .flow__item:nth-child(2) {
+        border-right: 0;
+      }
+
+      .flow__item:nth-child(-n+2) {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .flow__item:nth-child(2)::after {
+        display: none;
+      }
+
+      .section-head__note {
+        justify-self: start;
+      }
+
+      .use-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .use-card,
+      .use-card:nth-child(2) {
+        min-height: 260px;
+        transform: none;
+      }
+
+      .use-card__index {
+        margin-bottom: 4rem;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .masthead__issue {
+        max-width: 140px;
+      }
+
+      h1 {
+        font-size: clamp(3.7rem, 20vw, 5.2rem);
+      }
+
+      .flow__grid,
+      .metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .flow__item,
+      .flow__item:nth-child(2) {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .flow__item:last-child {
+        border-bottom: 0;
+      }
+
+      .flow__item::after {
+        display: none !important;
+      }
+
+      .truth-row {
+        grid-template-columns: 1fr;
+        gap: .55rem;
+      }
+
+      .status-band__top,
+      footer {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to the report</a>
+
+  <header class="shell masthead" aria-label="Pageup report masthead">
+    <div class="masthead__issue">Field report № 001 · July 2026</div>
+    <div class="masthead__mark">pageup</div>
+    <div class="masthead__state"><span class="pulse" aria-hidden="true"></span>Live / healthy</div>
+  </header>
+
+  <main id="main">
+    <section class="shell hero" aria-labelledby="hero-title">
+      <div>
+        <p class="kicker reveal">A publishing lane for agents</p>
+        <h1 id="hero-title" class="reveal delay-1">Make the work <em>visible.</em></h1>
+        <p class="lede reveal delay-2">Pageup turns a local HTML file into a polished, shareable page—with one authenticated command and one unlisted URL.</p>
+      </div>
+      <aside class="dispatch reveal delay-3" aria-label="Mission note">
+        <p class="dispatch__label">Mission note</p>
+        <h2 class="dispatch__title">The work deserves a better handoff than a wall of terminal text.</h2>
+        <p>Use Pages for project summaries, progress reports, visual proofs, comparisons, demos, or any artifact that benefits from being seen rather than described.</p>
+      </aside>
+    </section>
+
+    <section class="shell command-deck reveal delay-3" aria-label="Pageup command example">
+      <div class="command-deck__bar"><span>Terminal / authenticated</span><span>One command</span></div>
+      <div class="command-deck__body">
+        <div><span class="prompt">$</span> pageup project-summary.html</div>
+        <div class="output">https://pages.gabrielmalek.com/019f…</div>
+      </div>
+    </section>
+
+    <section class="shell flow" aria-label="How Pageup works">
+      <div class="flow__grid">
+        <article class="flow__item">
+          <span class="flow__number">01</span>
+          <h3>Gather facts</h3>
+          <p>Changes, tests, decisions, open work, and the evidence that proves the result.</p>
+        </article>
+        <article class="flow__item">
+          <span class="flow__number">02</span>
+          <h3>Shape the story</h3>
+          <p>A self-contained, responsive HTML page with a deliberate visual point of view.</p>
+        </article>
+        <article class="flow__item">
+          <span class="flow__number">03</span>
+          <h3>Sign + upload</h3>
+          <p>The local CLI signs the request. Unknown devices and unsigned requests are rejected.</p>
+        </article>
+        <article class="flow__item">
+          <span class="flow__number">04</span>
+          <h3>Share the URL</h3>
+          <p>Each upload receives its own immutable UUIDv7 address, ready for human review.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="shell" aria-labelledby="uses-title">
+      <div class="section-head">
+        <div>
+          <p class="section-label">Designed for the handoff</p>
+          <h2 id="uses-title">More than a screenshot. Less than a deployment.</h2>
+        </div>
+        <p class="section-head__note">Pages fills the useful middle: fast enough for an agent, expressive enough for a person, and durable enough to revisit after the terminal session is gone.</p>
+      </div>
+
+      <div class="use-grid">
+        <article class="use-card">
+          <span class="use-card__index">USE CASE / 01</span>
+          <h3>Completion brief</h3>
+          <p>Summarize what shipped, what changed, how it was verified, and exactly how to use it.</p>
+        </article>
+        <article class="use-card">
+          <span class="use-card__index">USE CASE / 02</span>
+          <h3>Progress board</h3>
+          <p>Show what is complete, in motion, blocked, and next—with an honest as-of timestamp.</p>
+        </article>
+        <article class="use-card">
+          <span class="use-card__index">USE CASE / 03</span>
+          <h3>Visual artifact</h3>
+          <p>Publish a prototype, diagram, comparison, data story, or standalone interactive explanation.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="shell truths" aria-labelledby="truths-title">
+      <div class="truths__intro">
+        <p class="section-label">Rules of the road</p>
+        <h2 id="truths-title">Small surface. Clear promises.</h2>
+        <p>Pageup is intentionally narrow: it publishes HTML reliably and leaves the creative range wide open.</p>
+      </div>
+
+      <dl class="truth-list">
+        <div class="truth-row">
+          <dt>Private publishing</dt>
+          <dd>Only explicitly authorized Ed25519 keys can upload. Installing the CLI alone grants no access.</dd>
+        </div>
+        <div class="truth-row">
+          <dt>Public viewing</dt>
+          <dd>Anyone with the generated link can view a page. There is no public index, but links are not access-controlled.</dd>
+        </div>
+        <div class="truth-row">
+          <dt>One page, one address</dt>
+          <dd>Every upload gets a fresh UUIDv7 URL. Pages are immutable, so corrections are published at a new address.</dd>
+        </div>
+        <div class="truth-row">
+          <dt>File or raw HTML</dt>
+          <dd>Point the CLI at an HTML file or pipe generated markup to standard input. Each page may be up to 5 MiB.</dd>
+        </div>
+        <div class="truth-row">
+          <dt>Many pages</dt>
+          <dd>There is no configured page-count limit. The practical boundary is the persistent storage available on the server.</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="shell status-band" aria-labelledby="status-title">
+      <div class="status-band__top">
+        <h2 id="status-title">Shipped.</h2>
+        <span class="stamp">Production verified</span>
+      </div>
+      <div class="metrics" aria-label="Current Pageup status">
+        <div class="metric"><strong>0.1.1</strong><span>Live release</span></div>
+        <div class="metric"><strong>1</strong><span>Authorized admin</span></div>
+        <div class="metric"><strong>5 MiB</strong><span>Per-page limit</span></div>
+        <div class="metric"><strong>∞*</strong><span>Page count</span></div>
+      </div>
+    </section>
+
+    <section class="shell closing" aria-labelledby="closing-title">
+      <h2 id="closing-title">Finish the work.<br><span>Show the work.</span></h2>
+      <p class="closing__note">The new <strong>Pages</strong> agent skill turns project evidence into a designed HTML handoff, publishes it through Pageup, verifies the result, and returns the final URL.</p>
+    </section>
+  </main>
+
+  <footer class="shell">
+    <span>Pageup / Pages skill</span>
+    <span>Authenticated uploads · Unlisted viewing</span>
+    <span>*Bounded by storage</span>
+  </footer>
+</body>
+</html>
