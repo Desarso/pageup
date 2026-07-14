@@ -23,6 +23,14 @@ Windows PowerShell:
 irm https://pages.gabrielmalek.com/install.ps1 | iex
 ```
 
+Every Pageup CLI binary contains the complete `$pages` agent skill. Install it into the detected Codex or `~/.agents` skill directory with:
+
+```sh
+pageup skill install
+```
+
+Use `pageup skill show` to inspect the embedded instructions, `--harness project` to install under `./.agents/skills`, or `--target DIR` for another agent harness. Existing skill files are preserved unless `--force` is supplied.
+
 The initial machine is configured during deployment. For a new computer, create a separate, revocable key:
 
 ```sh
@@ -48,6 +56,8 @@ pageup --open file.html              upload and open in the default browser
 pageup doctor                        test connectivity and authentication
 pageup whoami                        show the active key
 pageup public-key                    print this device's public key
+pageup skill show                    print the embedded Pages skill
+pageup skill install                 install Pages into an agent harness
 pageup keys add --name NAME PUBKEY   authorize another device
 pageup keys list                     list authorized devices
 pageup keys revoke KEY_ID            revoke a device

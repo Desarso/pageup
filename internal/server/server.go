@@ -84,6 +84,8 @@ func (server *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", server.handleHealth)
 	mux.HandleFunc("/robots.txt", server.handleRobots)
+	mux.HandleFunc("/favicon.svg", server.handleFavicon)
+	mux.HandleFunc("/favicon.ico", server.handleFavicon)
 	mux.HandleFunc("/install.sh", server.handleInstallShell)
 	mux.HandleFunc("/install.ps1", server.handleInstallPowerShell)
 	mux.HandleFunc("/downloads/", server.handleDownload)
@@ -110,6 +112,21 @@ func (server *Server) handleRobots(writer http.ResponseWriter, request *http.Req
 	}
 	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	writer.Write([]byte("User-agent: *\nDisallow: /\n"))
+}
+
+func (server *Server) handleFavicon(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodHead {
+		methodNotAllowed(writer, http.MethodGet)
+		return
+	}
+	writer.Header().Set("Content-Type", "image/svg+xml")
+	writer.Header().Set("Cache-Control", "public, max-age=86400")
+	writer.Header().Set("Content-Length", strconv.Itoa(len(faviconSVG)))
+	if request.Method == http.MethodHead {
+		writer.WriteHeader(http.StatusOK)
+		return
+	}
+	io.WriteString(writer, faviconSVG)
 }
 
 func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Request) {
@@ -439,10 +456,19 @@ func (server *Server) accessLog(next http.Handler) http.Handler {
 	})
 }
 
+const faviconSVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<rect width="64" height="64" rx="11" fill="#171816"/>
+<path d="M16 47V17h14c9 0 14 4.6 14 12s-5 12-14 12h-6v6h-8Zm8-14h6c4 0 6-1.3 6-4s-2-4-6-4h-6v8Z" fill="#eee9dc"/>
+<path d="m42 43 6-6 6 6m-6-6v13" fill="none" stroke="#c9ff3d" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter"/>
+<circle cx="14" cy="51" r="4" fill="#ff5538"/>
+</svg>`
+
 const landingHTML = `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0c0d0e">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <title>Pageup</title>
 <style>
   :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

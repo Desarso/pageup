@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pages"
+  short_description: "Publish polished HTML reports with Pageup"
+  default_prompt: "Use $pages to create and publish a polished HTML project summary."

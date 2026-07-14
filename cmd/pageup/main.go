@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/desarso/pageup/internal/api"
 	"github.com/desarso/pageup/internal/client"
+	"github.com/desarso/pageup/internal/pageskill"
 	"github.com/desarso/pageup/internal/protocol"
 )
 
@@ -47,6 +49,8 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	case "public-key":
 		return runPublicKey(args[1:])
+	case "skill":
+		return runSkill(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println(version)
 		return nil
@@ -285,6 +289,134 @@ func runPublicKey(args []string) error {
 	return nil
 }
 
+func runSkill(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: pageup skill <show|install>")
+	}
+	switch args[0] {
+	case "show":
+		if len(args) != 1 {
+			return errors.New("usage: pageup skill show")
+		}
+		content, err := pageskill.SkillMarkdown()
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(content)
+		return err
+	case "install":
+		flags := flag.NewFlagSet("skill install", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		harness := flags.String("harness", "auto", "auto, codex, agents, or project")
+		target := flags.String("target", "", "custom skills directory")
+		force := flags.Bool("force", false, "replace embedded files in an existing Pages skill")
+		jsonOutput := flags.Bool("json", false, "print JSON")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("usage: pageup skill install [--harness auto|codex|agents|project] [--target DIR] [--force]")
+		}
+		root, resolvedHarness, err := resolveSkillRoot(*harness, *target)
+		if err != nil {
+			return err
+		}
+		path, err := pageskill.Install(root, *force)
+		if err != nil {
+			return err
+		}
+		if *jsonOutput {
+			return printJSON(map[string]string{
+				"skill":   pageskill.Name,
+				"harness": resolvedHarness,
+				"path":    path,
+			})
+		}
+		fmt.Printf("Installed $%s for %s at %s\n", pageskill.Name, resolvedHarness, path)
+		fmt.Println("Start a new agent session to discover the skill.")
+		return nil
+	default:
+		return fmt.Errorf("unknown skill command %q (expected show or install)", args[0])
+	}
+}
+
+func resolveSkillRoot(harness, target string) (string, string, error) {
+	if target != "" {
+		if harness != "" && harness != "auto" {
+			return "", "", errors.New("use either --target or --harness, not both")
+		}
+		path, err := absoluteUserPath(target)
+		return path, "custom", err
+	}
+	if value := strings.TrimSpace(os.Getenv("PAGEUP_SKILLS_DIR")); value != "" && (harness == "" || harness == "auto") {
+		path, err := absoluteUserPath(value)
+		return path, "custom", err
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", err
+	}
+	if harness == "" {
+		harness = "auto"
+	}
+	if harness == "auto" {
+		if os.Getenv("CODEX_HOME") != "" {
+			harness = "codex"
+		} else if info, statErr := os.Stat(filepath.Join(home, ".codex")); statErr == nil && info.IsDir() {
+			harness = "codex"
+		} else if info, statErr := os.Stat(filepath.Join(home, ".agents")); statErr == nil && info.IsDir() {
+			harness = "agents"
+		} else {
+			harness = "codex"
+		}
+	}
+
+	var root string
+	switch harness {
+	case "codex":
+		base := strings.TrimSpace(os.Getenv("CODEX_HOME"))
+		if base == "" {
+			base = filepath.Join(home, ".codex")
+		}
+		root = filepath.Join(base, "skills")
+	case "agents":
+		root = filepath.Join(home, ".agents", "skills")
+	case "project":
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			return "", "", err
+		}
+		root = filepath.Join(workingDirectory, ".agents", "skills")
+	default:
+		return "", "", fmt.Errorf("unsupported harness %q (use auto, codex, agents, project, or --target DIR)", harness)
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	return root, harness, nil
+}
+
+func absoluteUserPath(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("skills directory cannot be empty")
+	}
+	if value == "~" || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, `~\`) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		if value == "~" {
+			value = home
+		} else {
+			value = filepath.Join(home, value[2:])
+		}
+	}
+	return filepath.Abs(value)
+}
+
 func configuredClient() (*client.Client, client.Config, error) {
 	config, err := client.LoadConfig("")
 	if err != nil {
@@ -353,8 +485,18 @@ Usage:
   pageup keys revoke KEY_ID           revoke a device
   pageup whoami                       show the active credential
   pageup doctor                       verify server and authentication
+  pageup skill show                   print the embedded $pages skill
+  pageup skill install                add $pages to this agent harness
+  pageup public-key                   print this device's public key
+  pageup version                      print the CLI version
 
 Upload options (place before the file):
   --json  emit a machine-readable result
-  --open  open the resulting URL`)
+  --open  open the resulting URL
+
+Skill installation:
+  pageup skill install                         auto-detect Codex or ~/.agents
+  pageup skill install --harness project       install into ./.agents/skills
+  pageup skill install --target /skills/root   install for any other harness
+  Add --force to update an existing embedded $pages skill.`)
 }

@@ -107,6 +107,52 @@ func TestUploadRequiresSignatureAndServesImmutablePage(t *testing.T) {
 	}
 }
 
+func TestLandingPublishesSiteFavicon(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+
+	landing, err := http.Get(environment.server.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	landingBody, err := io.ReadAll(landing.Body)
+	landing.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landing.StatusCode != http.StatusOK || !strings.Contains(string(landingBody), `href="/favicon.svg"`) {
+		t.Fatalf("landing status = %d, favicon link missing", landing.StatusCode)
+	}
+
+	favicon, err := http.Get(environment.server.URL + "/favicon.svg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	faviconBody, err := io.ReadAll(favicon.Body)
+	favicon.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if favicon.StatusCode != http.StatusOK {
+		t.Fatalf("favicon status = %d", favicon.StatusCode)
+	}
+	if favicon.Header.Get("Content-Type") != "image/svg+xml" {
+		t.Fatalf("favicon content type = %q", favicon.Header.Get("Content-Type"))
+	}
+	if !strings.Contains(string(faviconBody), `<svg`) || !strings.Contains(string(faviconBody), `#c9ff3d`) {
+		t.Fatal("favicon response does not contain the Pageup SVG")
+	}
+
+	head, err := http.Head(environment.server.URL + "/favicon.ico")
+	if err != nil {
+		t.Fatal(err)
+	}
+	head.Body.Close()
+	if head.StatusCode != http.StatusOK || head.Header.Get("Content-Length") == "" {
+		t.Fatalf("favicon fallback HEAD status = %d, length = %q", head.StatusCode, head.Header.Get("Content-Length"))
+	}
+}
+
 func TestTamperedAndReplayedRequestsAreRejected(t *testing.T) {
 	environment := newTestEnvironment(t, 1<<20)
 	defer environment.close()
