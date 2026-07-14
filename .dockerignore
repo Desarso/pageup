@@ -1,0 +1,7 @@
+.git
+.credentials
+.deploy
+bin
+*.out
+*.test
+.DS_Store

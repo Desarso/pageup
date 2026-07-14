@@ -1,0 +1,142 @@
+package protocol
+
+import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	HeaderKeyID     = "X-Pageup-Key"
+	HeaderTimestamp = "X-Pageup-Timestamp"
+	HeaderNonce     = "X-Pageup-Nonce"
+	HeaderSignature = "X-Pageup-Signature"
+	SignaturePrefix = "pageup-signature-v1"
+)
+
+func KeyID(publicKey ed25519.PublicKey) string {
+	sum := sha256.Sum256(publicKey)
+	return hex.EncodeToString(sum[:8])
+}
+
+func EncodePublicKey(publicKey ed25519.PublicKey) string {
+	return base64.RawURLEncoding.EncodeToString(publicKey)
+}
+
+func EncodePrivateKey(privateKey ed25519.PrivateKey) string {
+	return base64.RawURLEncoding.EncodeToString(privateKey)
+}
+
+func DecodePublicKey(value string) (ed25519.PublicKey, error) {
+	raw, err := decodeBase64(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode public key: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("public key must be %d bytes", ed25519.PublicKeySize)
+	}
+	return ed25519.PublicKey(raw), nil
+}
+
+func DecodePrivateKey(value string) (ed25519.PrivateKey, error) {
+	raw, err := decodeBase64(value)
+	if err != nil {
+		return nil, fmt.Errorf("decode private key: %w", err)
+	}
+	switch len(raw) {
+	case ed25519.SeedSize:
+		return ed25519.NewKeyFromSeed(raw), nil
+	case ed25519.PrivateKeySize:
+		return ed25519.PrivateKey(raw), nil
+	default:
+		return nil, fmt.Errorf("private key must be %d-byte seed or %d-byte key", ed25519.SeedSize, ed25519.PrivateKeySize)
+	}
+}
+
+func decodeBase64(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	encodings := []*base64.Encoding{
+		base64.RawURLEncoding,
+		base64.URLEncoding,
+		base64.RawStdEncoding,
+		base64.StdEncoding,
+	}
+	var lastErr error
+	for _, encoding := range encodings {
+		decoded, err := encoding.DecodeString(value)
+		if err == nil {
+			return decoded, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func BodyHash(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func Canonical(method, path string, timestamp int64, nonce string, body []byte) []byte {
+	return []byte(strings.Join([]string{
+		SignaturePrefix,
+		strings.ToUpper(method),
+		path,
+		strconv.FormatInt(timestamp, 10),
+		nonce,
+		BodyHash(body),
+	}, "\n"))
+}
+
+func Sign(privateKey ed25519.PrivateKey, method, path string, timestamp int64, nonce string, body []byte) string {
+	signature := ed25519.Sign(privateKey, Canonical(method, path, timestamp, nonce, body))
+	return base64.RawURLEncoding.EncodeToString(signature)
+}
+
+func SignRequest(request *http.Request, privateKey ed25519.PrivateKey, nonce string, body []byte, now time.Time) {
+	publicKey := privateKey.Public().(ed25519.PublicKey)
+	timestamp := now.Unix()
+	request.Header.Set(HeaderKeyID, KeyID(publicKey))
+	request.Header.Set(HeaderTimestamp, strconv.FormatInt(timestamp, 10))
+	request.Header.Set(HeaderNonce, nonce)
+	request.Header.Set(HeaderSignature, Sign(privateKey, request.Method, request.URL.EscapedPath(), timestamp, nonce, body))
+}
+
+func DecodeSignature(value string) ([]byte, error) {
+	raw, err := decodeBase64(value)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) != ed25519.SignatureSize {
+		return nil, errors.New("invalid signature length")
+	}
+	return raw, nil
+}
+
+// NewUUIDv7 returns an RFC 9562 UUIDv7. Its timestamp makes recent uploads sort
+// naturally while 74 random bits keep page URLs impractical to guess.
+func NewUUIDv7(now time.Time) (string, error) {
+	var bytes [16]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		return "", err
+	}
+	milliseconds := uint64(now.UnixMilli())
+	bytes[0] = byte(milliseconds >> 40)
+	bytes[1] = byte(milliseconds >> 32)
+	bytes[2] = byte(milliseconds >> 24)
+	bytes[3] = byte(milliseconds >> 16)
+	bytes[4] = byte(milliseconds >> 8)
+	bytes[5] = byte(milliseconds)
+	bytes[6] = (bytes[6] & 0x0f) | 0x70
+	bytes[8] = (bytes[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16]), nil
+}

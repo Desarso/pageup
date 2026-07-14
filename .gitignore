@@ -1,0 +1,6 @@
+/bin/
+/.credentials/
+/.deploy/
+*.out
+*.test
+.DS_Store
