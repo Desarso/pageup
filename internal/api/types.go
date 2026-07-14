@@ -7,9 +7,11 @@ type ErrorResponse struct {
 }
 
 type UploadResponse struct {
-	ID      string `json:"id"`
-	URL     string `json:"url"`
-	Created bool   `json:"created"`
+	ID       string `json:"id"`
+	URL      string `json:"url"`
+	Created  bool   `json:"created"`
+	Updated  bool   `json:"updated"`
+	Revision uint64 `json:"revision"`
 }
 
 type Key struct {

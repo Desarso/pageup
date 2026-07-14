@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,44 @@ func TestResolveProjectSkillRoot(t *testing.T) {
 	}
 	if harness != "project" || root != filepath.Join(workingDirectory, ".agents", "skills") {
 		t.Fatalf("project root = %q, harness = %q", root, harness)
+	}
+}
+
+func TestParsePageID(t *testing.T) {
+	id := "019f620a-226d-7981-88d3-83da3b460b6c"
+	endpoint := "https://pages.gabrielmalek.com"
+	for _, value := range []string{
+		id,
+		endpoint + "/" + id,
+		endpoint + "/" + id + "?preview=latest#top",
+	} {
+		parsed, err := parsePageID(value, endpoint)
+		if err != nil {
+			t.Fatalf("parsePageID(%q): %v", value, err)
+		}
+		if parsed != id {
+			t.Fatalf("parsePageID(%q) = %q", value, parsed)
+		}
+	}
+
+	for _, value := range []string{
+		"not-a-page",
+		"https://example.com/" + id,
+		endpoint + "/" + id + "/extra",
+		strings.ToUpper(id),
+	} {
+		if _, err := parsePageID(value, endpoint); err == nil {
+			t.Fatalf("parsePageID(%q) unexpectedly succeeded", value)
+		}
+	}
+}
+
+func TestHelpExplainsUpdatesAndEmbeddedSkill(t *testing.T) {
+	var output strings.Builder
+	printUsage(&output)
+	for _, expected := range []string{"pageup update URL", "pageup skill install", "same URL"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatalf("help is missing %q", expected)
+		}
 	}
 }

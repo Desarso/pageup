@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 const (
 	HeaderKeyID     = "X-Pageup-Key"
@@ -139,4 +142,10 @@ func NewUUIDv7(now time.Time) (string, error) {
 	bytes[8] = (bytes[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		bytes[0:4], bytes[4:6], bytes[6:8], bytes[8:10], bytes[10:16]), nil
+}
+
+// IsUUIDv7 reports whether value is the canonical lowercase representation of
+// an RFC 9562 UUIDv7.
+func IsUUIDv7(value string) bool {
+	return uuidV7Pattern.MatchString(value)
 }

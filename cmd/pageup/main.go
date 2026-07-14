@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +42,8 @@ func run(args []string) error {
 		return runInit(args[1:])
 	case "upload":
 		return runUpload(args[1:])
+	case "update":
+		return runUpdate(args[1:])
 	case "keys":
 		return runKeys(args[1:])
 	case "whoami":
@@ -127,6 +130,48 @@ func runUpload(args []string) error {
 	context, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	result, err := pageup.Upload(context, html)
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		if err := printJSON(result); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println(result.URL)
+	}
+	if *openPage {
+		return openURL(result.URL)
+	}
+	return nil
+}
+
+func runUpdate(args []string) error {
+	flags := flag.NewFlagSet("update", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	jsonOutput := flags.Bool("json", false, "print JSON")
+	openPage := flags.Bool("open", false, "open the updated page")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 2 {
+		return errors.New("usage: pageup update [--json] [--open] <URL-or-UUID> <file.html|->")
+	}
+	pageup, config, err := configuredClient()
+	if err != nil {
+		return err
+	}
+	id, err := parsePageID(flags.Arg(0), config.Endpoint)
+	if err != nil {
+		return err
+	}
+	html, err := readHTML(flags.Arg(1))
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	result, err := pageup.Update(ctx, id, html)
 	if err != nil {
 		return err
 	}
@@ -443,6 +488,29 @@ func readHTML(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+func parsePageID(value, endpoint string) (string, error) {
+	value = strings.TrimSpace(value)
+	if protocol.IsUUIDv7(value) {
+		return value, nil
+	}
+	pageURL, err := url.Parse(value)
+	if err != nil || !pageURL.IsAbs() || pageURL.User != nil {
+		return "", errors.New("page must be a UUIDv7 or a Pageup URL")
+	}
+	endpointURL, err := url.Parse(endpoint)
+	if err != nil {
+		return "", errors.New("configured Pageup endpoint is invalid")
+	}
+	if !strings.EqualFold(pageURL.Scheme, endpointURL.Scheme) || !strings.EqualFold(pageURL.Host, endpointURL.Host) {
+		return "", fmt.Errorf("page URL must belong to %s", strings.TrimRight(endpoint, "/"))
+	}
+	id := strings.Trim(pageURL.Path, "/")
+	if !protocol.IsUUIDv7(id) {
+		return "", errors.New("Pageup URL does not contain a valid UUIDv7 page id")
+	}
+	return id, nil
+}
+
 func openURL(value string) error {
 	var command *exec.Cmd
 	switch runtime.GOOS {
@@ -479,6 +547,7 @@ func printUsage(writer io.Writer) {
 Usage:
   pageup <file.html>                   upload in one command
   pageup -                            upload HTML from stdin
+  pageup update URL <file.html|->     replace a page at the same URL
   pageup init [--endpoint URL]        create this device's key pair
   pageup keys add --name NAME PUBKEY  authorize another device
   pageup keys list                    list authorized devices
@@ -493,6 +562,10 @@ Usage:
 Upload options (place before the file):
   --json  emit a machine-readable result
   --open  open the resulting URL
+
+Update options (place before the URL):
+  pageup update --json URL file.html  emit revision and update state as JSON
+  pageup update --open UUID file.html update by id and open the page
 
 Skill installation:
   pageup skill install                         auto-detect Codex or ~/.agents

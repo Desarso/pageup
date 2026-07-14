@@ -701,6 +701,8 @@
       <div class="command-deck__body">
         <div><span class="prompt">$</span> pageup project-summary.html</div>
         <div class="output">https://pages.gabrielmalek.com/019f…</div>
+        <div><span class="prompt">$</span> pageup update https://pages.gabrielmalek.com/019f… project-summary.html</div>
+        <div class="output">same URL · revision 2</div>
       </div>
     </section>
 
@@ -724,7 +726,7 @@
         <article class="flow__item">
           <span class="flow__number">04</span>
           <h3>Share the URL</h3>
-          <p>Each upload receives its own immutable UUIDv7 address, ready for human review.</p>
+          <p>New pages receive UUIDv7 addresses; later revisions can keep the exact same link.</p>
         </article>
       </div>
     </section>
@@ -774,8 +776,8 @@
           <dd>Anyone with the generated link can view a page. There is no public index, but links are not access-controlled.</dd>
         </div>
         <div class="truth-row">
-          <dt>One page, one address</dt>
-          <dd>Every upload gets a fresh UUIDv7 URL. Pages are immutable, so corrections are published at a new address.</dd>
+          <dt>One page, one lasting address</dt>
+          <dd>Every new page gets a UUIDv7 URL. Its creator or an admin can publish later revisions without changing that address.</dd>
         </div>
         <div class="truth-row">
           <dt>File or raw HTML</dt>
@@ -794,7 +796,7 @@
         <span class="stamp">Production verified</span>
       </div>
       <div class="metrics" aria-label="Current Pageup status">
-        <div class="metric"><strong>0.1.1</strong><span>Live release</span></div>
+        <div class="metric"><strong>0.2.0</strong><span>Live release</span></div>
         <div class="metric"><strong>1</strong><span>Authorized admin</span></div>
         <div class="metric"><strong>5 MiB</strong><span>Per-page limit</span></div>
         <div class="metric"><strong>∞*</strong><span>Page count</span></div>

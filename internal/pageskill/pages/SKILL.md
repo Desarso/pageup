@@ -1,11 +1,11 @@
 ---
 name: pages
-description: Create and publish self-contained HTML artifacts through the authenticated Pageup CLI. Use when Codex should present project completion or progress in a polished shareable page, publish a status report, handoff, demo, comparison, dashboard, or visual explanation, or upload an existing HTML file for human review at pages.gabrielmalek.com.
+description: Create, update, and publish self-contained HTML artifacts through the authenticated Pageup CLI. Use when Codex should present project completion or progress in a polished shareable page, publish or revise a status report, handoff, demo, comparison, dashboard, or visual explanation, keep an existing Pageup URL current, or upload an HTML file for human review at pages.gabrielmalek.com.
 ---
 
 # Pages
 
-Use Pageup to turn HTML into an immutable, unlisted, shareable URL. Treat uploading as authenticated and viewing as public to anyone who has the URL.
+Use Pageup to turn HTML into an unlisted, shareable URL. Treat creating and updating pages as authenticated, and viewing as public to anyone who has the URL.
 
 ## Build the artifact
 
@@ -43,10 +43,19 @@ Use structured output when another command must consume the result:
 pageup --json path/to/report.html
 ```
 
+Keep an existing URL current when the user names that page or the artifact is an ongoing report:
+
+```sh
+pageup update PAGE_URL path/to/report.html
+generate-html | pageup update PAGE_UUID -
+```
+
+`pageup update` accepts either the full Pageup URL or its UUIDv7, replaces the HTML in place, and prints the unchanged URL. The key that created a page can update it; an admin key can update any page. Pages created before ownership tracking are admin-only until first updated by an admin. Use a new upload when the artifact should have a distinct URL or history boundary.
+
 Do not print, copy, or commit `~/.config/pageup/config.json`. If authentication is missing, install the CLI and create a device key, then have an existing admin authorize its public key; never transfer an existing private key.
 
 ## Verify and hand off
 
-Open or preview the result and check the important content at desktop and narrow widths. Also verify that the returned URL responds successfully. Correct problems in the local HTML and upload again; uploads are immutable, so every corrected upload receives a new URL.
+Open or preview the result and check the important content at desktop and narrow widths. Also verify that the returned URL responds successfully and contains the current revision. Correct problems in the local HTML, then update the same URL when continuity matters or upload a new page when it does not.
 
 Return the final URL prominently with a one-line description. Mention that the page is public-but-unlisted when the audience could mistake the link for access-controlled content.

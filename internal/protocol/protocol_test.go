@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +43,14 @@ func TestNewUUIDv7(t *testing.T) {
 	pattern := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	if !pattern.MatchString(id) {
 		t.Fatalf("not a UUIDv7: %s", id)
+	}
+	if !IsUUIDv7(id) {
+		t.Fatalf("IsUUIDv7 rejected %s", id)
+	}
+	for _, invalid := range []string{"", strings.ToUpper(id), "019f620a-226d-6981-88d3-83da3b460b6c", id + "/extra"} {
+		if IsUUIDv7(invalid) {
+			t.Fatalf("IsUUIDv7 accepted %q", invalid)
+		}
 	}
 }
 

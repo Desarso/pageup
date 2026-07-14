@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -24,6 +25,7 @@ type testEnvironment struct {
 	server     *httptest.Server
 	privateKey ed25519.PrivateKey
 	config     pageclient.Config
+	dataDir    string
 	now        time.Time
 }
 
@@ -34,6 +36,7 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
+	dataDir := t.TempDir()
 	bootstrap, err := json.Marshal([]api.Key{{
 		Name:      "test admin",
 		PublicKey: protocol.EncodePublicKey(publicKey),
@@ -43,7 +46,7 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 		t.Fatal(err)
 	}
 	service, err := New(Config{
-		DataDir:       t.TempDir(),
+		DataDir:       dataDir,
 		BootstrapKeys: string(bootstrap),
 		MaxPageBytes:  maxBytes,
 		Version:       "test",
@@ -61,14 +64,49 @@ func newTestEnvironment(t *testing.T, maxBytes int64) testEnvironment {
 		PrivateKey: protocol.EncodePrivateKey(privateKey),
 		Name:       "test admin",
 	}
-	return testEnvironment{server: httpServer, privateKey: privateKey, config: config, now: now}
+	return testEnvironment{server: httpServer, privateKey: privateKey, config: config, dataDir: dataDir, now: now}
 }
 
 func (environment testEnvironment) close() {
 	environment.server.Close()
 }
 
-func TestUploadRequiresSignatureAndServesImmutablePage(t *testing.T) {
+func addUploadClient(t *testing.T, admin *pageclient.Client, endpoint, name string) (*pageclient.Client, string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := admin.AddKey(context.Background(), api.AddKeyRequest{
+		Name:      name,
+		PublicKey: protocol.EncodePublicKey(publicKey),
+		Role:      RoleUpload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := pageclient.New(pageclient.Config{
+		Version:    1,
+		Endpoint:   endpoint,
+		KeyID:      key.ID,
+		PrivateKey: protocol.EncodePrivateKey(privateKey),
+		Name:       name,
+	}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, key.ID
+}
+
+func apiErrorStatus(err error) int {
+	var apiError *pageclient.APIError
+	if errors.As(err, &apiError) {
+		return apiError.StatusCode
+	}
+	return 0
+}
+
+func TestUploadRequiresSignatureAndServesPageWithoutCaching(t *testing.T) {
 	environment := newTestEnvironment(t, 1<<20)
 	defer environment.close()
 
@@ -89,7 +127,7 @@ func TestUploadRequiresSignatureAndServesImmutablePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Created || !strings.HasPrefix(result.URL, environment.server.URL+"/") {
+	if !result.Created || result.Updated || result.Revision != 1 || !strings.HasPrefix(result.URL, environment.server.URL+"/") {
 		t.Fatalf("unexpected upload result: %#v", result)
 	}
 
@@ -102,8 +140,197 @@ func TestUploadRequiresSignatureAndServesImmutablePage(t *testing.T) {
 	if response.StatusCode != http.StatusOK || string(body) != "<!doctype html><h1>hello</h1>" {
 		t.Fatalf("page response %d %q", response.StatusCode, body)
 	}
-	if response.Header.Get("Cache-Control") != "public, max-age=31536000, immutable" {
+	if response.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("unexpected cache header %q", response.Header.Get("Cache-Control"))
+	}
+	metadataInfo, err := os.Stat(environment.dataDir + "/pages/" + result.ID + ".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadataInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("page metadata mode = %o", metadataInfo.Mode().Perm())
+	}
+}
+
+func TestUpdateRequiresSignatureAndKeepsURL(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	admin, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := admin.Upload(context.Background(), []byte("<h1>first</h1>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unsigned, _ := http.NewRequest(http.MethodPut, environment.server.URL+"/api/pages/"+upload.ID, strings.NewReader("<h1>no</h1>"))
+	unsigned.Header.Set("Content-Type", "text/html")
+	response, err := http.DefaultClient.Do(unsigned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unsigned update status = %d", response.StatusCode)
+	}
+
+	updated, err := admin.Update(context.Background(), upload.ID, []byte("<h1>second</h1>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != upload.ID || updated.URL != upload.URL || updated.Created || !updated.Updated || updated.Revision != 2 {
+		t.Fatalf("unexpected update result: %#v", updated)
+	}
+
+	response, err = http.Get(upload.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != "<h1>second</h1>" {
+		t.Fatalf("updated page response %d %q", response.StatusCode, body)
+	}
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("updated page cache header = %q", response.Header.Get("Cache-Control"))
+	}
+
+	unchanged, err := admin.Update(context.Background(), upload.ID, []byte("<h1>second</h1>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Updated || unchanged.Revision != 2 || unchanged.URL != upload.URL {
+		t.Fatalf("unexpected unchanged result: %#v", unchanged)
+	}
+	missingID, err := protocol.NewUUIDv7(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Update(context.Background(), missingID, []byte("missing")); apiErrorStatus(err) != http.StatusNotFound {
+		t.Fatalf("missing page update error = %v", err)
+	}
+}
+
+func TestConcurrentUpdatesAreSerialized(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	admin, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := admin.Upload(context.Background(), []byte("revision 1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type updateResult struct {
+		response api.UploadResponse
+		err      error
+	}
+	results := make(chan updateResult, 2)
+	for _, body := range [][]byte{[]byte("revision alpha"), []byte("revision beta")} {
+		body := body
+		go func() {
+			response, err := admin.Update(context.Background(), upload.ID, body)
+			results <- updateResult{response: response, err: err}
+		}()
+	}
+	revisions := make(map[uint64]bool)
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if !result.response.Updated {
+			t.Fatalf("concurrent update was not marked updated: %#v", result.response)
+		}
+		revisions[result.response.Revision] = true
+	}
+	if !revisions[2] || !revisions[3] || len(revisions) != 2 {
+		t.Fatalf("concurrent revisions = %#v", revisions)
+	}
+	metadata, err := readPageMetadata(environment.dataDir+"/pages/"+upload.ID+".json", upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Revision != 3 {
+		t.Fatalf("stored revision = %d", metadata.Revision)
+	}
+}
+
+func TestPageOwnersAndAdminsCanUpdate(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	admin, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ownerID := addUploadClient(t, admin, environment.server.URL, "owner")
+	other, _ := addUploadClient(t, admin, environment.server.URL, "other")
+
+	upload, err := owner.Upload(context.Background(), []byte("owner revision 1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Update(context.Background(), upload.ID, []byte("owner revision 2")); err != nil {
+		t.Fatalf("owner update failed: %v", err)
+	}
+	if _, err := other.Update(context.Background(), upload.ID, []byte("not allowed")); apiErrorStatus(err) != http.StatusForbidden {
+		t.Fatalf("other key update error = %v", err)
+	}
+	adminUpdate, err := admin.Update(context.Background(), upload.ID, []byte("admin revision 3"))
+	if err != nil {
+		t.Fatalf("admin update failed: %v", err)
+	}
+	if adminUpdate.Revision != 3 {
+		t.Fatalf("admin update revision = %d", adminUpdate.Revision)
+	}
+
+	metadata, err := readPageMetadata(environment.dataDir+"/pages/"+upload.ID+".json", upload.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.OwnerKeyID != ownerID {
+		t.Fatalf("admin update changed owner from %s to %s", ownerID, metadata.OwnerKeyID)
+	}
+}
+
+func TestLegacyPagesAreAdminOnlyAndBecomeOwned(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	admin, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uploader, _ := addUploadClient(t, admin, environment.server.URL, "uploader")
+	id, err := protocol.NewUUIDv7(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	htmlPath := environment.dataDir + "/pages/" + id + ".html"
+	if err := os.WriteFile(htmlPath, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := uploader.Update(context.Background(), id, []byte("denied")); apiErrorStatus(err) != http.StatusForbidden {
+		t.Fatalf("legacy uploader update error = %v", err)
+	}
+	updated, err := admin.Update(context.Background(), id, []byte("migrated"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Updated || updated.Revision != 2 {
+		t.Fatalf("legacy update result = %#v", updated)
+	}
+	metadata, err := readPageMetadata(environment.dataDir+"/pages/"+id+".json", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.OwnerKeyID != environment.config.KeyID {
+		t.Fatalf("legacy owner = %q", metadata.OwnerKeyID)
 	}
 }
 
@@ -272,6 +499,18 @@ func TestUploadSizeLimit(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d", response.StatusCode)
+	}
+
+	client, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := client.Upload(context.Background(), []byte("small"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Update(context.Background(), upload.ID, body); apiErrorStatus(err) != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized update error = %v", err)
 	}
 }
 

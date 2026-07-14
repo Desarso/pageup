@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,8 +23,6 @@ import (
 )
 
 const defaultMaxPageBytes int64 = 5 << 20
-
-var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 type Config struct {
 	DataDir       string
@@ -41,6 +38,7 @@ type Config struct {
 type Server struct {
 	config Config
 	keys   *KeyStore
+	pages  sync.Mutex
 	nonces struct {
 		sync.Mutex
 		used map[string]time.Time
@@ -90,6 +88,7 @@ func (server *Server) Handler() http.Handler {
 	mux.HandleFunc("/install.ps1", server.handleInstallPowerShell)
 	mux.HandleFunc("/downloads/", server.handleDownload)
 	mux.HandleFunc("/api/pages", server.handleUpload)
+	mux.HandleFunc("/api/pages/", server.handleUpdate)
 	mux.HandleFunc("/api/keys", server.handleKeys)
 	mux.HandleFunc("/api/keys/", server.handleKey)
 	mux.HandleFunc("/api/whoami", server.handleWhoAmI)
@@ -143,11 +142,11 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return
 	}
-	_, nonce, ok := server.authorize(writer, request, body, false)
+	key, nonce, ok := server.authorize(writer, request, body, false)
 	if !ok {
 		return
 	}
-	if !uuidV7Pattern.MatchString(nonce) {
+	if !protocol.IsUUIDv7(nonce) {
 		writeError(writer, http.StatusUnauthorized, "authentication failed")
 		return
 	}
@@ -155,8 +154,7 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusBadRequest, "HTML page cannot be empty")
 		return
 	}
-	path := filepath.Join(server.config.DataDir, "pages", nonce+".html")
-	created, err := writeImmutable(path, body)
+	created, metadata, err := server.createPage(nonce, key, body)
 	if err != nil {
 		if errors.Is(err, errContentConflict) {
 			writeError(writer, http.StatusConflict, "page id already exists with different content")
@@ -171,9 +169,59 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 		status = http.StatusOK
 	}
 	writeJSON(writer, status, api.UploadResponse{
-		ID:      nonce,
-		URL:     server.publicURL(request) + "/" + nonce,
-		Created: created,
+		ID:       nonce,
+		URL:      server.publicURL(request) + "/" + nonce,
+		Created:  created,
+		Revision: metadata.Revision,
+	})
+}
+
+func (server *Server) handleUpdate(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPut {
+		methodNotAllowed(writer, http.MethodPut)
+		return
+	}
+	id := strings.TrimPrefix(request.URL.Path, "/api/pages/")
+	if !protocol.IsUUIDv7(id) {
+		http.NotFound(writer, request)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "text/html" && mediaType != "application/xhtml+xml") {
+		writeError(writer, http.StatusUnsupportedMediaType, "Content-Type must be text/html")
+		return
+	}
+	body, ok := readBody(writer, request, server.config.MaxPageBytes)
+	if !ok {
+		return
+	}
+	key, _, ok := server.authorize(writer, request, body, false)
+	if !ok {
+		return
+	}
+	if len(body) == 0 {
+		writeError(writer, http.StatusBadRequest, "HTML page cannot be empty")
+		return
+	}
+	updated, metadata, err := server.updatePage(id, key, body)
+	if errors.Is(err, os.ErrNotExist) {
+		writeError(writer, http.StatusNotFound, "page not found")
+		return
+	}
+	if errors.Is(err, errPageForbidden) {
+		writeError(writer, http.StatusForbidden, "this key cannot update that page")
+		return
+	}
+	if err != nil {
+		server.config.Logger.Error("update page", "page_id", id, "error", err)
+		writeError(writer, http.StatusInternalServerError, "could not update page")
+		return
+	}
+	writeJSON(writer, http.StatusOK, api.UploadResponse{
+		ID:       id,
+		URL:      server.publicURL(request) + "/" + id,
+		Updated:  updated,
+		Revision: metadata.Revision,
 	})
 }
 
@@ -271,7 +319,7 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	id := strings.TrimPrefix(request.URL.Path, "/")
-	if !uuidV7Pattern.MatchString(id) {
+	if !protocol.IsUUIDv7(id) {
 		http.NotFound(writer, request)
 		return
 	}
@@ -292,7 +340,7 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
-	writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", "inline")
 	http.ServeContent(writer, request, id+".html", info.ModTime(), file)
 }
@@ -310,7 +358,7 @@ func (server *Server) authorize(writer http.ResponseWriter, request *http.Reques
 	if keyID == "" || nonce == "" || timestampValue == "" || signatureValue == "" {
 		return fail("missing headers")
 	}
-	if !uuidV7Pattern.MatchString(nonce) {
+	if !protocol.IsUUIDv7(nonce) {
 		return fail("invalid nonce")
 	}
 	timestamp, err := strconv.ParseInt(timestampValue, 10, 64)

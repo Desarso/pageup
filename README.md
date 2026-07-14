@@ -7,7 +7,7 @@ $ pageup report.html
 https://pages.gabrielmalek.com/019c...
 ```
 
-Viewing pages is public so links can be shared. Uploading and key management require an Ed25519-signed request; the server stores public keys only. Every upload gets an immutable UUIDv7 URL, and there is no public page index.
+Viewing pages is public so links can be shared. Creating, updating, and managing access require Ed25519-signed requests; the server stores public keys only. Every new upload gets a UUIDv7 URL, existing pages can be updated in place by their creator or an admin, and there is no public page index.
 
 ## Install
 
@@ -51,8 +51,10 @@ This pairing flow never moves a private key between computers. Use `pageup keys 
 ```text
 pageup file.html                     upload a file; print its URL
 pageup -                             upload HTML from stdin
-pageup --json file.html              return id, URL, and creation state as JSON
+pageup --json file.html              return id, URL, and revision state as JSON
 pageup --open file.html              upload and open in the default browser
+pageup update URL file.html          update HTML without changing the URL
+pageup update UUID -                 update by id with HTML from stdin
 pageup doctor                        test connectivity and authentication
 pageup whoami                        show the active key
 pageup public-key                    print this device's public key
@@ -69,7 +71,7 @@ Credentials live at `~/.config/pageup/config.json` on Linux, the normal applicat
 
 Each request signs the HTTP method, path, Unix timestamp, random UUIDv7 nonce, and SHA-256 body hash. The server rejects unknown keys, modified requests, timestamps outside five minutes, and replayed nonces. Admin-only endpoints add, list, or revoke keys. Upload-only keys cannot manage access.
 
-Pages are capped at 5 MiB, stored outside the container on a persistent volume, served as `text/html`, and immutable. Anyone with a page URL can view it; UUID randomness and the absence of a listing provide link privacy, not access control.
+Pages are capped at 5 MiB, stored outside the container on a persistent volume, and served as uncached `text/html` so in-place updates appear immediately. Each page records its creator key: that key and admin keys may update it at the same UUID and URL. Legacy pages without ownership metadata are admin-only until an admin updates them once. Anyone with a page URL can view it; UUID randomness and the absence of a listing provide link privacy, not access control.
 
 ## Development
 

@@ -55,6 +55,15 @@ func (client *Client) Upload(ctx context.Context, html []byte) (api.UploadRespon
 	return result, err
 }
 
+func (client *Client) Update(ctx context.Context, id string, html []byte) (api.UploadResponse, error) {
+	if !protocol.IsUUIDv7(id) {
+		return api.UploadResponse{}, errors.New("page id must be a UUIDv7")
+	}
+	var result api.UploadResponse
+	_, err := client.doSigned(ctx, http.MethodPut, "/api/pages/"+url.PathEscape(id), html, "text/html; charset=utf-8", &result)
+	return result, err
+}
+
 func (client *Client) AddKey(ctx context.Context, input api.AddKeyRequest) (api.Key, error) {
 	body, err := json.Marshal(input)
 	if err != nil {

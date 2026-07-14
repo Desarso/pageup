@@ -10,4 +10,12 @@ pageup path/to/page.html
 
 The command prints only the shareable URL on success. Use `pageup --json page.html` when a machine-readable response is preferable, or pipe content with `pageup -`.
 
+To replace an existing page without changing its UUID or URL, use:
+
+```sh
+pageup update <URL-or-UUID> path/to/page.html
+```
+
+The page's creator key or an admin key may update it. `pageup update <URL-or-UUID> -` accepts HTML from standard input.
+
 Run `pageup doctor` if credentials or connectivity are in doubt. Never print, commit, or copy the private key from `~/.config/pageup/config.json`.
