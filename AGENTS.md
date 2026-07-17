@@ -8,12 +8,21 @@ When a human needs to inspect or share a generated HTML artifact, upload it with
 pageup path/to/page.html
 ```
 
+For a small multi-page experiment, pass a directory with `index.html` at its root:
+
+```sh
+pageup path/to/site
+```
+
+Site directories may contain up to 100 `.html` files in nested folders. Keep CSS and JavaScript inline and use URLs for images and other assets.
+
 The command prints only the shareable URL on success. Use `pageup --json page.html` when a machine-readable response is preferable, or pipe content with `pageup -`.
 
-To replace an existing page without changing its UUID or URL, use:
+To replace an existing page without changing its UUID, use:
 
 ```sh
 pageup update <URL-or-UUID> path/to/page.html
+pageup update <URL-or-UUID> path/to/site
 ```
 
 The page's creator key or an admin key may update it. `pageup update <URL-or-UUID> -` accepts HTML from standard input.

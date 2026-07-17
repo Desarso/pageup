@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/desarso/pageup/internal/api"
 	pageclient "github.com/desarso/pageup/internal/client"
 	"github.com/desarso/pageup/internal/protocol"
+	"github.com/desarso/pageup/internal/sitebundle"
 )
 
 type testEnvironment struct {
@@ -212,6 +214,123 @@ func TestUpdateRequiresSignatureAndKeepsURL(t *testing.T) {
 	}
 	if _, err := admin.Update(context.Background(), missingID, []byte("missing")); apiErrorStatus(err) != http.StatusNotFound {
 		t.Fatalf("missing page update error = %v", err)
+	}
+}
+
+func TestHTMLSiteUploadServesNestedPagesAndDirectoryIndexes(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	client, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeSiteFile(t, root, "index.html", `<a href="about.html">About</a><a href="docs/">Docs</a>`)
+	writeSiteFile(t, root, "about.html", `<h1>About</h1>`)
+	writeSiteFile(t, root, "docs/index.html", `<h1>Docs</h1>`)
+	archive, err := sitebundle.Pack(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.UploadSite(context.Background(), archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Created || !strings.HasSuffix(result.URL, "/") {
+		t.Fatalf("unexpected site upload result: %#v", result)
+	}
+	assertHTMLResponse(t, result.URL, `<a href="about.html">About</a><a href="docs/">Docs</a>`)
+	assertHTMLResponse(t, result.URL+"about.html", `<h1>About</h1>`)
+	assertHTMLResponse(t, result.URL+"docs/", `<h1>Docs</h1>`)
+
+	noRedirect := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, value := range []string{strings.TrimSuffix(result.URL, "/"), result.URL + "docs"} {
+		response, err := noRedirect.Get(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusPermanentRedirect || !strings.HasSuffix(response.Header.Get("Location"), "/") {
+			t.Fatalf("redirect for %s = %d, location %q", value, response.StatusCode, response.Header.Get("Location"))
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(environment.dataDir, "pages", result.ID+".site.zip")); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := http.Get(result.URL + "missing.html"); err != nil {
+		t.Fatal(err)
+	} else {
+		response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("missing site page status = %d", response.StatusCode)
+		}
+	}
+}
+
+func TestHTMLSiteUpdatesAndCanConvertToSinglePage(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	client, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	writeSiteFile(t, root, "index.html", "site revision 1")
+	first, err := sitebundle.Pack(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upload, err := client.UploadSite(context.Background(), first)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	unchanged, err := client.UpdateSite(context.Background(), upload.ID, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Updated || unchanged.Revision != 1 || unchanged.URL != upload.URL {
+		t.Fatalf("unchanged site update = %#v", unchanged)
+	}
+
+	writeSiteFile(t, root, "index.html", "site revision 2")
+	second, err := sitebundle.Pack(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := client.UpdateSite(context.Background(), upload.ID, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Updated || updated.Revision != 2 || !strings.HasSuffix(updated.URL, "/") {
+		t.Fatalf("site update = %#v", updated)
+	}
+	assertHTMLResponse(t, upload.URL, "site revision 2")
+
+	single, err := client.Update(context.Background(), upload.ID, []byte("single revision 3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !single.Updated || single.Revision != 3 || strings.HasSuffix(single.URL, "/") {
+		t.Fatalf("site-to-page update = %#v", single)
+	}
+	assertHTMLResponse(t, single.URL, "single revision 3")
+	if _, err := os.Stat(filepath.Join(environment.dataDir, "pages", upload.ID+".site.zip")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old site archive still exists: %v", err)
+	}
+}
+
+func TestHTMLSiteUploadRejectsInvalidArchive(t *testing.T) {
+	environment := newTestEnvironment(t, 1<<20)
+	defer environment.close()
+	client, err := pageclient.New(environment.config, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UploadSite(context.Background(), []byte("not a ZIP archive")); apiErrorStatus(err) != http.StatusBadRequest {
+		t.Fatalf("invalid site upload error = %v", err)
 	}
 }
 
@@ -540,5 +659,35 @@ func TestKeyStorePersists(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("key store mode = %o", info.Mode().Perm())
+	}
+}
+
+func writeSiteFile(t *testing.T, root, name, contents string) {
+	t.Helper()
+	filename := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertHTMLResponse(t *testing.T, url, expected string) {
+	t.Helper()
+	response, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if response.StatusCode != http.StatusOK || string(body) != expected {
+		t.Fatalf("GET %s = %d %q", url, response.StatusCode, body)
+	}
+	if response.Header.Get("Content-Type") != "text/html; charset=utf-8" || response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("GET %s headers: content-type=%q cache-control=%q", url, response.Header.Get("Content-Type"), response.Header.Get("Cache-Control"))
 	}
 }

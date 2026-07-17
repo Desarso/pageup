@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -20,9 +21,13 @@ import (
 
 	"github.com/desarso/pageup/internal/api"
 	"github.com/desarso/pageup/internal/protocol"
+	"github.com/desarso/pageup/internal/sitebundle"
 )
 
-const defaultMaxPageBytes int64 = 5 << 20
+const (
+	defaultMaxPageBytes    int64 = 5 << 20
+	maxSiteArchiveOverhead       = 1 << 20
+)
 
 type Config struct {
 	DataDir       string
@@ -133,12 +138,16 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 		methodNotAllowed(writer, http.MethodPost)
 		return
 	}
-	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
-	if err != nil || (mediaType != "text/html" && mediaType != "application/xhtml+xml") {
-		writeError(writer, http.StatusUnsupportedMediaType, "Content-Type must be text/html")
+	kind, ok := pageKindFromContentType(request.Header.Get("Content-Type"))
+	if !ok {
+		writeError(writer, http.StatusUnsupportedMediaType, "Content-Type must be text/html or "+sitebundle.MediaType)
 		return
 	}
-	body, ok := readBody(writer, request, server.config.MaxPageBytes)
+	maxBodyBytes := server.config.MaxPageBytes
+	if kind == pageKindSite {
+		maxBodyBytes += maxSiteArchiveOverhead
+	}
+	body, ok := readBody(writer, request, maxBodyBytes)
 	if !ok {
 		return
 	}
@@ -151,10 +160,16 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if len(body) == 0 {
-		writeError(writer, http.StatusBadRequest, "HTML page cannot be empty")
+		writeError(writer, http.StatusBadRequest, "HTML upload cannot be empty")
 		return
 	}
-	created, metadata, err := server.createPage(nonce, key, body)
+	if kind == pageKindSite {
+		if _, err := sitebundle.Parse(body, server.config.MaxPageBytes); err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid HTML site: "+err.Error())
+			return
+		}
+	}
+	created, metadata, err := server.createPage(nonce, key, kind, body)
 	if err != nil {
 		if errors.Is(err, errContentConflict) {
 			writeError(writer, http.StatusConflict, "page id already exists with different content")
@@ -170,7 +185,7 @@ func (server *Server) handleUpload(writer http.ResponseWriter, request *http.Req
 	}
 	writeJSON(writer, status, api.UploadResponse{
 		ID:       nonce,
-		URL:      server.publicURL(request) + "/" + nonce,
+		URL:      server.pageURL(request, nonce, kind),
 		Created:  created,
 		Revision: metadata.Revision,
 	})
@@ -186,12 +201,16 @@ func (server *Server) handleUpdate(writer http.ResponseWriter, request *http.Req
 		http.NotFound(writer, request)
 		return
 	}
-	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
-	if err != nil || (mediaType != "text/html" && mediaType != "application/xhtml+xml") {
-		writeError(writer, http.StatusUnsupportedMediaType, "Content-Type must be text/html")
+	kind, ok := pageKindFromContentType(request.Header.Get("Content-Type"))
+	if !ok {
+		writeError(writer, http.StatusUnsupportedMediaType, "Content-Type must be text/html or "+sitebundle.MediaType)
 		return
 	}
-	body, ok := readBody(writer, request, server.config.MaxPageBytes)
+	maxBodyBytes := server.config.MaxPageBytes
+	if kind == pageKindSite {
+		maxBodyBytes += maxSiteArchiveOverhead
+	}
+	body, ok := readBody(writer, request, maxBodyBytes)
 	if !ok {
 		return
 	}
@@ -200,10 +219,16 @@ func (server *Server) handleUpdate(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	if len(body) == 0 {
-		writeError(writer, http.StatusBadRequest, "HTML page cannot be empty")
+		writeError(writer, http.StatusBadRequest, "HTML upload cannot be empty")
 		return
 	}
-	updated, metadata, err := server.updatePage(id, key, body)
+	if kind == pageKindSite {
+		if _, err := sitebundle.Parse(body, server.config.MaxPageBytes); err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid HTML site: "+err.Error())
+			return
+		}
+	}
+	updated, metadata, err := server.updatePage(id, key, kind, body)
 	if errors.Is(err, os.ErrNotExist) {
 		writeError(writer, http.StatusNotFound, "page not found")
 		return
@@ -219,7 +244,7 @@ func (server *Server) handleUpdate(writer http.ResponseWriter, request *http.Req
 	}
 	writeJSON(writer, http.StatusOK, api.UploadResponse{
 		ID:       id,
-		URL:      server.publicURL(request) + "/" + id,
+		URL:      server.pageURL(request, id, kind),
 		Updated:  updated,
 		Revision: metadata.Revision,
 	})
@@ -318,13 +343,19 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		server.handleLanding(writer)
 		return
 	}
-	id := strings.TrimPrefix(request.URL.Path, "/")
+	pagePath := strings.TrimPrefix(request.URL.Path, "/")
+	id, subpath, hasSubpath := strings.Cut(pagePath, "/")
 	if !protocol.IsUUIDv7(id) {
 		http.NotFound(writer, request)
 		return
 	}
-	path := filepath.Join(server.config.DataDir, "pages", id+".html")
-	file, err := os.Open(path)
+	server.pages.Lock()
+	kind, storedPath, body, err := server.readPageContent(id)
+	var info os.FileInfo
+	if err == nil {
+		info, err = os.Stat(storedPath)
+	}
+	server.pages.Unlock()
 	if errors.Is(err, os.ErrNotExist) {
 		http.NotFound(writer, request)
 		return
@@ -333,16 +364,80 @@ func (server *Server) handlePage(writer http.ResponseWriter, request *http.Reque
 		writeError(writer, http.StatusInternalServerError, "could not read page")
 		return
 	}
-	defer file.Close()
-	info, err := file.Stat()
+	if kind == pageKindHTML {
+		if hasSubpath {
+			http.NotFound(writer, request)
+			return
+		}
+		serveHTML(writer, request, id+".html", info.ModTime(), body)
+		return
+	}
+	if !hasSubpath {
+		redirectWithSlash(writer, request)
+		return
+	}
+	site, err := sitebundle.Parse(body, server.config.MaxPageBytes)
 	if err != nil {
+		server.config.Logger.Error("read HTML site", "page_id", id, "error", err)
 		writeError(writer, http.StatusInternalServerError, "could not read page")
 		return
 	}
+	requested := subpath
+	if requested == "" {
+		requested = "index.html"
+	} else if strings.HasSuffix(requested, "/") {
+		requested += "index.html"
+	}
+	contents, exists := site.Files[requested]
+	if !exists && subpath != "" && !strings.HasSuffix(subpath, "/") {
+		if _, hasIndex := site.Files[subpath+"/index.html"]; hasIndex {
+			redirectWithSlash(writer, request)
+			return
+		}
+	}
+	if !exists {
+		http.NotFound(writer, request)
+		return
+	}
+	serveHTML(writer, request, requested, info.ModTime(), contents)
+}
+
+func pageKindFromContentType(value string) (pageKind, bool) {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		return "", false
+	}
+	switch mediaType {
+	case "text/html", "application/xhtml+xml":
+		return pageKindHTML, true
+	case sitebundle.MediaType:
+		return pageKindSite, true
+	default:
+		return "", false
+	}
+}
+
+func (server *Server) pageURL(request *http.Request, id string, kind pageKind) string {
+	result := server.publicURL(request) + "/" + id
+	if kind == pageKindSite {
+		result += "/"
+	}
+	return result
+}
+
+func redirectWithSlash(writer http.ResponseWriter, request *http.Request) {
+	location := request.URL.EscapedPath() + "/"
+	if request.URL.RawQuery != "" {
+		location += "?" + request.URL.RawQuery
+	}
+	http.Redirect(writer, request, location, http.StatusPermanentRedirect)
+}
+
+func serveHTML(writer http.ResponseWriter, request *http.Request, name string, modified time.Time, body []byte) {
 	writer.Header().Set("Content-Type", "text/html; charset=utf-8")
 	writer.Header().Set("Cache-Control", "no-store")
 	writer.Header().Set("Content-Disposition", "inline")
-	http.ServeContent(writer, request, id+".html", info.ModTime(), file)
+	http.ServeContent(writer, request, name, modified, bytes.NewReader(body))
 }
 
 func (server *Server) authorize(writer http.ResponseWriter, request *http.Request, body []byte, adminOnly bool) (api.Key, string, bool) {

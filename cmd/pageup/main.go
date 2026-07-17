@@ -21,6 +21,7 @@ import (
 	"github.com/desarso/pageup/internal/client"
 	"github.com/desarso/pageup/internal/pageskill"
 	"github.com/desarso/pageup/internal/protocol"
+	"github.com/desarso/pageup/internal/sitebundle"
 )
 
 var version = "dev"
@@ -117,9 +118,9 @@ func runUpload(args []string) error {
 		return err
 	}
 	if flags.NArg() != 1 {
-		return errors.New("usage: pageup [--json] [--open] <file.html|->")
+		return errors.New("usage: pageup [--json] [--open] <file.html|site-directory|->")
 	}
-	html, err := readHTML(flags.Arg(0))
+	artifact, err := readArtifact(flags.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,12 @@ func runUpload(args []string) error {
 	}
 	context, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result, err := pageup.Upload(context, html)
+	var result api.UploadResponse
+	if artifact.site {
+		result, err = pageup.UploadSite(context, artifact.body)
+	} else {
+		result, err = pageup.Upload(context, artifact.body)
+	}
 	if err != nil {
 		return err
 	}
@@ -155,7 +161,7 @@ func runUpdate(args []string) error {
 		return err
 	}
 	if flags.NArg() != 2 {
-		return errors.New("usage: pageup update [--json] [--open] <URL-or-UUID> <file.html|->")
+		return errors.New("usage: pageup update [--json] [--open] <URL-or-UUID> <file.html|site-directory|->")
 	}
 	pageup, config, err := configuredClient()
 	if err != nil {
@@ -165,13 +171,18 @@ func runUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	html, err := readHTML(flags.Arg(1))
+	artifact, err := readArtifact(flags.Arg(1))
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	result, err := pageup.Update(ctx, id, html)
+	var result api.UploadResponse
+	if artifact.site {
+		result, err = pageup.UpdateSite(ctx, id, artifact.body)
+	} else {
+		result, err = pageup.Update(ctx, id, artifact.body)
+	}
 	if err != nil {
 		return err
 	}
@@ -471,21 +482,38 @@ func configuredClient() (*client.Client, client.Config, error) {
 	return pageup, config, err
 }
 
-func readHTML(path string) ([]byte, error) {
+type uploadArtifact struct {
+	body []byte
+	site bool
+}
+
+func readArtifact(path string) (uploadArtifact, error) {
 	if path == "-" {
-		return io.ReadAll(io.LimitReader(os.Stdin, (5<<20)+1))
+		body, err := io.ReadAll(io.LimitReader(os.Stdin, sitebundle.DefaultMaxBytes+1))
+		if err != nil {
+			return uploadArtifact{}, err
+		}
+		if int64(len(body)) > sitebundle.DefaultMaxBytes {
+			return uploadArtifact{}, errors.New("HTML file exceeds the 5 MiB upload limit")
+		}
+		return uploadArtifact{body: body}, nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return uploadArtifact{}, err
 	}
 	if info.IsDir() {
-		return nil, errors.New("HTML path is a directory")
+		archive, err := sitebundle.Pack(path, sitebundle.DefaultMaxBytes)
+		if err != nil {
+			return uploadArtifact{}, err
+		}
+		return uploadArtifact{body: archive, site: true}, nil
 	}
-	if info.Size() > 5<<20 {
-		return nil, errors.New("HTML file exceeds the 5 MiB upload limit")
+	if info.Size() > sitebundle.DefaultMaxBytes {
+		return uploadArtifact{}, errors.New("HTML file exceeds the 5 MiB upload limit")
 	}
-	return os.ReadFile(path)
+	body, err := os.ReadFile(path)
+	return uploadArtifact{body: body}, err
 }
 
 func parsePageID(value, endpoint string) (string, error) {
@@ -545,9 +573,9 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `pageup — private HTML uploads, shareable URLs
 
 Usage:
-  pageup <file.html>                   upload in one command
+  pageup <file.html|site-directory>    upload in one command
   pageup -                            upload HTML from stdin
-  pageup update URL <file.html|->     replace a page at the same URL
+  pageup update URL <path|->          replace a page or site at the same URL
   pageup init [--endpoint URL]        create this device's key pair
   pageup keys add --name NAME PUBKEY  authorize another device
   pageup keys list                    list authorized devices
@@ -566,6 +594,11 @@ Upload options (place before the file):
 Update options (place before the URL):
   pageup update --json URL file.html  emit revision and update state as JSON
   pageup update --open UUID file.html update by id and open the page
+
+HTML site directories:
+  Include index.html at the root and up to 100 .html files total.
+  Nested folders are preserved. CSS and JavaScript must remain inline;
+  images and other assets must use external URLs.
 
 Skill installation:
   pageup skill install                         auto-detect Codex or ~/.agents

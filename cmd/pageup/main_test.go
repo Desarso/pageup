@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/desarso/pageup/internal/sitebundle"
 )
 
 func TestResolveSkillRoot(t *testing.T) {
@@ -60,6 +62,7 @@ func TestParsePageID(t *testing.T) {
 	for _, value := range []string{
 		id,
 		endpoint + "/" + id,
+		endpoint + "/" + id + "/",
 		endpoint + "/" + id + "?preview=latest#top",
 	} {
 		parsed, err := parsePageID(value, endpoint)
@@ -86,9 +89,37 @@ func TestParsePageID(t *testing.T) {
 func TestHelpExplainsUpdatesAndEmbeddedSkill(t *testing.T) {
 	var output strings.Builder
 	printUsage(&output)
-	for _, expected := range []string{"pageup update URL", "pageup skill install", "same URL"} {
+	for _, expected := range []string{"pageup update URL", "pageup skill install", "same URL", "site-directory", "100 .html files"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("help is missing %q", expected)
 		}
+	}
+}
+
+func TestReadArtifactPacksHTMLDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "docs", "index.html"), []byte("docs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	artifact, err := readArtifact(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !artifact.site {
+		t.Fatal("directory was not recognized as an HTML site")
+	}
+	parsed, err := sitebundle.Parse(artifact.body, sitebundle.DefaultMaxBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(parsed.Files["index.html"]) != "index" || string(parsed.Files["docs/index.html"]) != "docs" {
+		t.Fatalf("unexpected packed site: %#v", parsed.Files)
 	}
 }

@@ -1,10 +1,13 @@
 # Pageup
 
-Pageup turns a local HTML file into an unlisted, shareable URL with one command:
+Pageup turns a local HTML file or small HTML-only directory into an unlisted, shareable URL with one command:
 
 ```console
 $ pageup report.html
 https://pages.gabrielmalek.com/019c...
+
+$ pageup ./experiment
+https://pages.gabrielmalek.com/019d.../
 ```
 
 Viewing pages is public so links can be shared. Creating, updating, and managing access require Ed25519-signed requests; the server stores public keys only. Every new upload gets a UUIDv7 URL, existing pages can be updated in place by their creator or an admin, and there is no public page index.
@@ -50,10 +53,12 @@ This pairing flow never moves a private key between computers. Use `pageup keys 
 
 ```text
 pageup file.html                     upload a file; print its URL
+pageup ./site                        upload an HTML-only directory
 pageup -                             upload HTML from stdin
 pageup --json file.html              return id, URL, and revision state as JSON
 pageup --open file.html              upload and open in the default browser
 pageup update URL file.html          update HTML without changing the URL
+pageup update URL ./site             update or convert to a multi-page site
 pageup update UUID -                 update by id with HTML from stdin
 pageup doctor                        test connectivity and authentication
 pageup whoami                        show the active key
@@ -65,13 +70,15 @@ pageup keys list                     list authorized devices
 pageup keys revoke KEY_ID            revoke a device
 ```
 
+For a multi-page site, pass a directory containing `index.html` at its root. Pageup recursively preserves up to 100 `.html` files, so links such as `href="about.html"` and `href="docs/"` work as expected. A nested `docs/index.html` is served at the directory-style URL `/docs/`. Directories may contain only HTML: keep CSS and JavaScript inline and use remote URLs for images, fonts, and other assets. The combined uncompressed HTML remains subject to the 5 MiB limit.
+
 Credentials live at `~/.config/pageup/config.json` on Linux, the normal application config directory on macOS/Windows, and always use mode `0600` where supported. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
 
 ## Security model
 
 Each request signs the HTTP method, path, Unix timestamp, random UUIDv7 nonce, and SHA-256 body hash. The server rejects unknown keys, modified requests, timestamps outside five minutes, and replayed nonces. Admin-only endpoints add, list, or revoke keys. Upload-only keys cannot manage access.
 
-Pages are capped at 5 MiB, stored outside the container on a persistent volume, and served as uncached `text/html` so in-place updates appear immediately. Each page records its creator key: that key and admin keys may update it at the same UUID and URL. Legacy pages without ownership metadata are admin-only until an admin updates them once. Anyone with a page URL can view it; UUID randomness and the absence of a listing provide link privacy, not access control.
+Pages and sites are capped at 5 MiB of HTML. Sites are additionally capped at 100 HTML files; archives are validated against path traversal, duplicate paths, non-HTML entries, and expanded-size abuse before storage. Content is stored outside the container on a persistent volume and served as uncached `text/html` so in-place updates appear immediately. Each page records its creator key: that key and admin keys may update it at the same UUID. Legacy pages without ownership metadata are admin-only until an admin updates them once. Anyone with a page URL can view it; UUID randomness and the absence of a listing provide link privacy, not access control.
 
 ## Development
 
@@ -93,5 +100,5 @@ Server settings:
 | `PAGEUP_DATA_DIR` | `/data` | Persistent pages and authorized-key store |
 | `PAGEUP_DOWNLOADS_DIR` | `/app/downloads` | Cross-platform CLI binaries |
 | `PAGEUP_BOOTSTRAP_KEYS` | required on first boot | JSON array containing at least one admin public key |
-| `PAGEUP_MAX_PAGE_BYTES` | `5242880` | Maximum uploaded HTML size |
+| `PAGEUP_MAX_PAGE_BYTES` | `5242880` | Maximum HTML bytes per page or site |
 | `PAGEUP_LISTEN_ADDR` | `:8080` | HTTP listen address |

@@ -15,6 +15,7 @@ import (
 
 	"github.com/desarso/pageup/internal/api"
 	"github.com/desarso/pageup/internal/protocol"
+	"github.com/desarso/pageup/internal/sitebundle"
 )
 
 type Client struct {
@@ -55,12 +56,27 @@ func (client *Client) Upload(ctx context.Context, html []byte) (api.UploadRespon
 	return result, err
 }
 
+func (client *Client) UploadSite(ctx context.Context, archive []byte) (api.UploadResponse, error) {
+	var result api.UploadResponse
+	_, err := client.doSigned(ctx, http.MethodPost, "/api/pages", archive, sitebundle.MediaType, &result)
+	return result, err
+}
+
 func (client *Client) Update(ctx context.Context, id string, html []byte) (api.UploadResponse, error) {
 	if !protocol.IsUUIDv7(id) {
 		return api.UploadResponse{}, errors.New("page id must be a UUIDv7")
 	}
 	var result api.UploadResponse
 	_, err := client.doSigned(ctx, http.MethodPut, "/api/pages/"+url.PathEscape(id), html, "text/html; charset=utf-8", &result)
+	return result, err
+}
+
+func (client *Client) UpdateSite(ctx context.Context, id string, archive []byte) (api.UploadResponse, error) {
+	if !protocol.IsUUIDv7(id) {
+		return api.UploadResponse{}, errors.New("page id must be a UUIDv7")
+	}
+	var result api.UploadResponse
+	_, err := client.doSigned(ctx, http.MethodPut, "/api/pages/"+url.PathEscape(id), archive, sitebundle.MediaType, &result)
 	return result, err
 }
 
