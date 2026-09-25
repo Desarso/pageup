@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -232,6 +233,10 @@ func writePageMetadata(path string, metadata pageMetadata) error {
 }
 
 func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
+	return writeAtomicStream(path, bytes.NewReader(data), mode)
+}
+
+func writeAtomicStream(path string, body io.Reader, mode os.FileMode) error {
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, ".pageup-*")
 	if err != nil {
@@ -243,7 +248,7 @@ func writeAtomicFile(path string, data []byte, mode os.FileMode) error {
 		temporary.Close()
 		return err
 	}
-	if _, err := temporary.Write(data); err != nil {
+	if _, err := io.Copy(temporary, body); err != nil {
 		temporary.Close()
 		return err
 	}

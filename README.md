@@ -1,6 +1,6 @@
 # Pageup
 
-Pageup turns a local HTML file or small HTML-only directory into an unlisted, shareable URL with one command:
+Pageup turns a local HTML file or small HTML-only directory into an unlisted, shareable URL with one command, and shares any other file the same way:
 
 ```console
 $ pageup report.html
@@ -8,6 +8,10 @@ https://pages.gabrielmalek.com/019c...
 
 $ pageup ./experiment
 https://pages.gabrielmalek.com/019d.../
+
+$ pageup file screenshot.png build.log
+https://pages.gabrielmalek.com/f/019e.../screenshot.png
+https://pages.gabrielmalek.com/f/019e.../build.log
 ```
 
 Viewing pages is public so links can be shared. Creating, updating, and managing access require Ed25519-signed requests; the server stores public keys only. Every new upload gets a UUIDv7 URL, existing pages can be updated in place by their creator or an admin, and there is no public page index.
@@ -60,6 +64,12 @@ pageup --open file.html              upload and open in the default browser
 pageup update URL file.html          update HTML without changing the URL
 pageup update URL ./site             update or convert to a multi-page site
 pageup update UUID -                 update by id with HTML from stdin
+pageup photo.png                     share a non-HTML file; print its URL
+pageup file a.pdf b.log              share several files, one URL per line
+pageup file --name out.log -         share stdin under a file name
+pageup update FILE_URL new.pdf       replace a file without changing its URL
+pageup update --name v2.pdf URL f    replace and rename a file
+pageup delete FILE_URL               delete a shared file
 pageup doctor                        test connectivity and authentication
 pageup whoami                        show the active key
 pageup public-key                    print this device's public key
@@ -71,6 +81,14 @@ pageup keys revoke KEY_ID            revoke a device
 ```
 
 For a multi-page site, pass a directory containing `index.html` at its root. Pageup recursively preserves up to 100 `.html` files, so links such as `href="about.html"` and `href="docs/"` work as expected. A nested `docs/index.html` is served at the directory-style URL `/docs/`. Directories may contain only HTML: keep CSS and JavaScript inline and use remote URLs for images, fonts, and other assets. The combined uncompressed HTML remains subject to the 5 MiB limit.
+
+## File sharing
+
+Any file that is not HTML can be shared: screenshots, images, PDFs, logs, data exports, archives, and recordings. A single non-HTML path is shared automatically, while `pageup file` accepts several paths or `-` for standard input with `--name`. Files without an extension are published as pages only when their content looks like HTML.
+
+Shared files live at `/f/<uuid>/<name>`. The UUID identifies the file; a missing or outdated name redirects to the current one. Images, PDFs, audio, video, plain text, Markdown, CSV, and JSON are served inline, and every other type, including HTML and SVG, is served as an attachment. `?download` forces an attachment. Responses support Range requests, so media can seek, and they use `Cache-Control: no-cache` with a SHA-256 ETag, so updates appear immediately while unchanged files revalidate cheaply. File responses allow cross-origin reads because they are already public to anyone with the URL.
+
+Updates keep the file name unless `--name` is given. The creator key or an admin can update or delete a file. Uploads stream in both directions: the CLI signs the file's SHA-256 in a header, the server authenticates the request before reading the body, verifies the hash while spooling to a temporary file, and then streams it to storage. Neither side holds the file in memory. Each file is capped by `PAGEUP_MAX_FILE_BYTES` (100 MiB by default). The CLI reports the limit in its 413 error.
 
 Credentials live at `~/.config/pageup/config.json` on Linux, the normal application config directory on macOS/Windows, and always use mode `0600` where supported. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
 
@@ -97,8 +115,9 @@ Server settings:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PAGEUP_PUBLIC_URL` | derived from request | Canonical origin returned after upload |
-| `PAGEUP_DATA_DIR` | `/data` | Persistent pages and authorized-key store |
+| `PAGEUP_DATA_DIR` | `/data` | Persistent pages, files, and authorized-key store |
 | `PAGEUP_DOWNLOADS_DIR` | `/app/downloads` | Cross-platform CLI binaries |
 | `PAGEUP_BOOTSTRAP_KEYS` | required on first boot | JSON array containing at least one admin public key |
 | `PAGEUP_MAX_PAGE_BYTES` | `5242880` | Maximum HTML bytes per page or site |
+| `PAGEUP_MAX_FILE_BYTES` | `104857600` | Maximum bytes per shared file |
 | `PAGEUP_LISTEN_ADDR` | `:8080` | HTTP listen address |
