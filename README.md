@@ -14,6 +14,8 @@ https://pages.gabrielmalek.com/f/019e.../screenshot.png
 https://pages.gabrielmalek.com/f/019e.../build.log
 ```
 
+![pageup --help output](docs/screenshots/cli-help.png)
+
 Viewing pages is public so links can be shared. Creating, updating, and managing access require Ed25519-signed requests; the server stores public keys only. Every new upload gets a UUIDv7 URL, existing pages can be updated in place by their creator or an admin, and there is no public page index.
 
 ## Install
@@ -70,9 +72,11 @@ pageup file --name out.log -         share stdin under a file name
 pageup update FILE_URL new.pdf       replace a file without changing its URL
 pageup update --name v2.pdf URL f    replace and rename a file
 pageup delete FILE_URL               delete a shared file
+pageup init [--endpoint URL] [--name N]  create this device's key pair (--force replaces it)
 pageup doctor                        test connectivity and authentication
 pageup whoami                        show the active key
 pageup public-key                    print this device's public key
+pageup version                       print the CLI version
 pageup skill show                    print the embedded Pages skill
 pageup skill install                 install Pages into an agent harness
 pageup keys add --name NAME PUBKEY   authorize another device
@@ -90,13 +94,28 @@ Shared files live at `/f/<uuid>/<name>`. The UUID identifies the file; a missing
 
 Updates keep the file name unless `--name` is given. The creator key or an admin can update or delete a file. Uploads stream in both directions: the CLI signs the file's SHA-256 in a header, the server authenticates the request before reading the body, verifies the hash while spooling to a temporary file, and then streams it to storage. Neither side holds the file in memory. Each file is capped by `PAGEUP_MAX_FILE_BYTES` (100 MiB by default). The CLI reports the limit in its 413 error.
 
-Credentials live at `~/.config/pageup/config.json` on Linux, the normal application config directory on macOS/Windows, and always use mode `0600` where supported. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` instead; treat the private-key value as a secret.
+Credentials live at `~/.config/pageup/config.json` on Linux, the normal application config directory on macOS/Windows, and always use mode `0600` where supported. `PAGEUP_CONFIG` selects another config file. Headless agents can use `PAGEUP_PRIVATE_KEY` with `PAGEUP_ENDPOINT` (and optionally `PAGEUP_DEVICE_NAME`) instead; treat the private-key value as a secret. `PAGEUP_SKILLS_DIR` overrides where `pageup skill install` writes the skill when no `--harness` or `--target` is given.
 
 ## Security model
 
 Each request signs the HTTP method, path, Unix timestamp, random UUIDv7 nonce, and SHA-256 body hash. The server rejects unknown keys, modified requests, timestamps outside five minutes, and replayed nonces. Admin-only endpoints add, list, or revoke keys. Upload-only keys cannot manage access.
 
 Pages and sites are capped at 5 MiB of HTML. Sites are additionally capped at 100 HTML files; archives are validated against path traversal, duplicate paths, non-HTML entries, and expanded-size abuse before storage. Content is stored outside the container on a persistent volume and served as uncached `text/html` so in-place updates appear immediately. Each page records its creator key: that key and admin keys may update it at the same UUID. Legacy pages without ownership metadata are admin-only until an admin updates them once. Anyone with a page URL can view it; UUID randomness and the absence of a listing provide link privacy, not access control.
+
+## Architecture
+
+```text
+pageup CLI ──Ed25519-signed HTTP──▶ pageup-server ──▶ PAGEUP_DATA_DIR (pages, files, keys)
+                                         │
+anyone with the URL ◀──── GET /<uuid>, /f/<uuid>/<name>
+```
+
+- `cmd/pageup` is the CLI; `cmd/pageup-server` is the HTTP server.
+- `internal/protocol` defines request signing, key IDs, and UUIDv7 validation shared by both sides.
+- `internal/client` holds credential storage and the signed HTTP client.
+- `internal/server` serves pages, files, CLI downloads, install scripts, and the key store.
+- `internal/sitebundle` packs and validates multi-page HTML directories.
+- `internal/pageskill` embeds and installs the `$pages` agent skill.
 
 ## Development
 
